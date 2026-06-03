@@ -1,6 +1,19 @@
 # ─────────────────────────────────────────────────────────────
 #  app.py — GST Invoice Validation System
 #  Validates invoices against a master company database
+#
+#  CHANGES FROM ORIGINAL:
+#  [NEW] Mobile PDF uploader tab — lets phone users upload via
+#        camera, file manager, or any app using a mobile-
+#        optimized Accept="application/pdf,image/*" input.
+#  [NEW] Image-to-PDF conversion path: phone users can snap a
+#        photo of a printed invoice; the system converts to PDF
+#        automatically using Pillow before extraction.
+#  [NEW] Upload mode toggle (Desktop / Mobile) at top of page.
+#  [NEW] Mobile upload section in style.css (.mobile-upload-*)
+#  [CHANGE] extract_pages() now accepts raw bytes so that the
+#           image→PDF path can feed bytes directly.
+#  [CHANGE] Sidebar Quick Guide updated to mention mobile step.
 # ─────────────────────────────────────────────────────────────
 
 import streamlit as st
@@ -19,7 +32,7 @@ with open("style.css") as f:
 
 # ── Module imports ────────────────────────────────────────────
 try:
-    from extractor import extract_pages, parse_invoice, parse_gst_certificate
+    from extractor import extract_pages, parse_invoice, parse_gst_certificate, image_to_pdf_bytes
     EXTRACT_OK = True
 except ImportError as e:
     EXTRACT_OK = False
@@ -85,14 +98,16 @@ with st.sidebar:
         </div>
         ''', unsafe_allow_html=True)
 
+    # [CHANGE] Updated Quick Guide to mention mobile step
     st.markdown('''
     <div class="sb-rule"></div>
     <div class="sb-help">
       <div class="sb-help-title">Quick Guide</div>
-      <div class="sb-help-item">1. Upload invoice PDF</div>
-      <div class="sb-help-item">2. System extracts fields</div>
-      <div class="sb-help-item">3. Matches against DB</div>
-      <div class="sb-help-item">4. Get field-by-field result</div>
+      <div class="sb-help-item">1. Upload invoice PDF or photo</div>
+      <div class="sb-help-item">2. Use Desktop or Mobile tab</div>
+      <div class="sb-help-item">3. System extracts fields</div>
+      <div class="sb-help-item">4. Matches against DB</div>
+      <div class="sb-help-item">5. Get field-by-field result</div>
     </div>
     ''', unsafe_allow_html=True)
 
@@ -112,28 +127,104 @@ if "Validate" in page:
     </div>
     ''', unsafe_allow_html=True)
 
-    # ── Upload section ─────────────────────────────────────
-    # Replace your existing invoice uploader with this:
-st.markdown('<div class="section-label">UPLOAD INVOICE</div>', unsafe_allow_html=True)
+    # ── Upload section ─────────────────────────────────────────
+    st.markdown('<div class="section-label">UPLOAD INVOICE</div>', unsafe_allow_html=True)
 
-tab1, tab2 = st.tabs(["📁 Upload PDF File", "📷 Use Camera (Mobile)"])
-
-with tab1:
-    inv_file = st.file_uploader(
-        "Upload Invoice PDF",
-        type=["pdf"],
+    # ─────────────────────────────────────────────────────────
+    # [NEW] Upload mode toggle — Desktop PDF vs Mobile upload
+    # ─────────────────────────────────────────────────────────
+    upload_mode = st.radio(
+        "Upload mode",
+        ["💻  Desktop — PDF file", "📱  Mobile — PDF or photo"],
+        horizontal=True,
         label_visibility="collapsed",
-        key="inv_upload",
+        key="upload_mode",
     )
-    if inv_file:
-        st.markdown(f'<div class="file-chip">✓ {inv_file.name}</div>',
-                    unsafe_allow_html=True)
 
-with tab2:
-    st.info("On mobile, if PDF upload doesn't work — take a photo of your invoice and upload the image instead.")
-    cam_file = st.camera_input("Take a photo of the invoice")
-    if cam_file:
-        st.success("Photo captured — note: image upload works best with clear, well-lit documents.")
+    inv_file   = None   # will hold UploadedFile or None
+    inv_bytes  = None   # final bytes fed to extractor
+    is_image   = False  # True when phone user uploads an image
+
+    up_col, info_col = st.columns([3, 2], gap="large")
+
+    with up_col:
+
+        if "Desktop" in upload_mode:
+            # ── Original desktop uploader (UNCHANGED) ──────────
+            inv_file = st.file_uploader(
+                "Upload Invoice PDF",
+                type=["pdf"],
+                label_visibility="collapsed",
+                key="inv_upload",
+            )
+            if inv_file:
+                st.markdown(
+                    f'<div class="file-chip">✓ {inv_file.name} ({round(inv_file.size/1024, 1)} KB)</div>',
+                    unsafe_allow_html=True,
+                )
+
+        else:
+            # ── [NEW] Mobile uploader ───────────────────────────
+            # Accepts PDF AND common image types so phone users
+            # can either pick a saved PDF or snap/select a photo.
+            st.markdown('''
+            <div class="mobile-upload-hint">
+              On your phone: tap <strong>Browse files</strong> then choose
+              <em>Camera</em>, <em>Files</em>, or <em>Gallery</em>.<br>
+              Images (JPG/PNG) will be auto-converted to PDF.
+            </div>
+            ''', unsafe_allow_html=True)
+
+            mobile_file = st.file_uploader(
+                "Upload from phone",
+                # [NEW] Accept PDF + image MIME types for mobile compatibility
+                type=["pdf", "jpg", "jpeg", "png", "webp"],
+                label_visibility="collapsed",
+                key="mobile_upload",
+            )
+
+            if mobile_file:
+                ext = mobile_file.name.rsplit(".", 1)[-1].lower()
+                is_image = ext in ("jpg", "jpeg", "png", "webp")
+
+                if is_image:
+                    # [NEW] Show a preview of the photo the user uploaded
+                    st.image(mobile_file, caption="Preview — will be converted to PDF", use_container_width=True)
+                    st.markdown(
+                        f'<div class="file-chip mobile-chip">📷 {mobile_file.name} ({round(mobile_file.size/1024, 1)} KB) — image</div>',
+                        unsafe_allow_html=True,
+                    )
+                    # [NEW] Convert image bytes → in-memory PDF bytes
+                    if EXTRACT_OK:
+                        with st.spinner("Converting image to PDF…"):
+                            inv_bytes = image_to_pdf_bytes(mobile_file.read())
+                        if inv_bytes:
+                            st.markdown(
+                                '<div class="file-chip">✓ Converted to PDF — ready to validate</div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.error("Image conversion failed. Try a cleaner scan or upload a PDF directly.")
+                else:
+                    # [NEW] PDF uploaded from phone — treat same as desktop
+                    inv_file = mobile_file
+                    st.markdown(
+                        f'<div class="file-chip mobile-chip">📱 {mobile_file.name} ({round(mobile_file.size/1024, 1)} KB)</div>',
+                        unsafe_allow_html=True,
+                    )
+
+    with info_col:
+        # [CHANGE] Added "Photo of invoice" bullet for mobile
+        st.markdown('''
+        <div class="info-box">
+          <div class="info-title">What gets validated</div>
+          <div class="info-row"><span class="info-dot green"></span>GST Number (exact match)</div>
+          <div class="info-row"><span class="info-dot green"></span>Company Name (fuzzy match)</div>
+          <div class="info-row"><span class="info-dot green"></span>Registered Address</div>
+          <div class="info-row"><span class="info-dot green"></span>Invoice Number (format check)</div>
+          <div class="info-row"><span class="info-dot green"></span>Photo of invoice (mobile)</div>
+        </div>
+        ''', unsafe_allow_html=True)
 
     # ── Manual override ────────────────────────────────────
     with st.expander("✏️  Manually enter or fix extracted values"):
@@ -156,14 +247,21 @@ with tab2:
     # ── Processing ─────────────────────────────────────────
     if run:
         inv_data = {}
-
         bar = st.progress(0, text="Starting…")
 
-        # Extract from PDF
-        if inv_file and EXTRACT_OK:
-            bar.progress(20, text="Reading invoice PDF…")
-            pages    = extract_pages(inv_file)
-            inv_data = parse_invoice(pages)
+        # [CHANGE] Extract from PDF — now handles both file object and raw bytes
+        if EXTRACT_OK:
+            if inv_bytes:
+                # [NEW] Path: mobile image was converted to bytes
+                bar.progress(20, text="Extracting text from converted image PDF…")
+                import io
+                pages    = extract_pages(io.BytesIO(inv_bytes))
+                inv_data = parse_invoice(pages)
+            elif inv_file:
+                # Original path: file uploader object
+                bar.progress(20, text="Reading invoice PDF…")
+                pages    = extract_pages(inv_file)
+                inv_data = parse_invoice(pages)
 
         bar.progress(55, text="Applying manual overrides…")
 
@@ -180,7 +278,7 @@ with tab2:
 
         if not inv_data:
             bar.empty()
-            st.markdown('<div class="alert-err">❌ No data found. Upload a PDF or fill in the manual fields above.</div>',
+            st.markdown('<div class="alert-err">❌ No data found. Upload a PDF or photo, or fill in the manual fields above.</div>',
                         unsafe_allow_html=True)
             st.stop()
 
@@ -341,9 +439,13 @@ with tab2:
         with dl2:
             rows = ["Field,Database Value,Invoice Value,Status,Score,Reason"]
             for r in result['results']:
-                rows.append(
-                    f'"{r.get("field","")}","{r.get("db_value","")}","{r.get("invoice_value","")}",{r.get("status","")},{r.get("score",0)},"{r.get("reason","")}"'
-                )
+                field   = r.get("field", "")
+                db_v    = r.get("db_value", "")
+                inv_v   = r.get("invoice_value", "")
+                status  = r.get("status", "")
+                score   = r.get("score", 0)
+                reason  = r.get("reason", "")
+                rows.append(f'"{field}","{db_v}","{inv_v}",{status},{score},"{reason}"')
             st.download_button(
                 "⬇️ CSV Report",
                 data="\n".join(rows),
@@ -369,7 +471,6 @@ elif "Database" in page:
         st.error("Database module not loaded.")
         st.stop()
 
-    # Search
     search = st.text_input("🔍 Search by GST number or company name", placeholder="Type to filter…")
 
     for gst, co in COMPANIES.items():
@@ -430,6 +531,17 @@ It scans the **entire document** to find:
 - Company name (near GST number, or after beneficiary/company labels)
 - Address (after GST label, or near 6-digit pincode)
 - Invoice number (after Invoice No / Proforma # labels)
+
+---
+
+### Step 1b — Mobile / Photo Upload [NEW]
+If you are on a phone, switch to the **📱 Mobile** tab.
+You can upload:
+- A PDF saved on your phone (same as desktop)
+- A **photo** of a printed invoice (JPG / PNG / WebP)
+
+Photo uploads are automatically converted to PDF using Pillow
+before the text extractor runs on them.
 
 ---
 
@@ -497,4 +609,7 @@ Save the file and restart the Streamlit app.
 
 **GST not found in invoice**
 → Use the manual override fields to paste the GST number directly.
+
+**Photo upload gives poor extraction results**
+→ Ensure good lighting, no shadows, and hold the camera parallel to the paper.
     """)

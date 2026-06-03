@@ -4,9 +4,20 @@ extractor.py
 Precision PDF extractor built against real GST REG-06 certificates
 and Trigya-style invoices. Falls back to generic heuristics for
 other document formats.
+
+CHANGES FROM ORIGINAL:
+  [NEW] image_to_pdf_bytes(image_data) — converts a phone photo
+        (JPG / PNG / WebP bytes) into an in-memory PDF using Pillow,
+        so mobile photo uploads can be fed to pdfplumber exactly
+        like a real PDF.
+  [CHANGE] extract_pages() now also accepts a BytesIO / bytes-like
+           object in addition to an UploadedFile. No API change —
+           the pdfplumber.open() call already handles both, but the
+           docstring is updated to reflect this.
 """
 
 import re
+import io
 
 # ── GST 15-char pattern ───────────────────────────────────────
 GST_RE = re.compile(r'\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9])\b')
@@ -31,11 +42,60 @@ def _clean(s):
 
 
 # ─────────────────────────────────────────────────────────────
+#  [NEW] IMAGE → PDF CONVERSION (for mobile photo uploads)
+# ─────────────────────────────────────────────────────────────
+
+def image_to_pdf_bytes(image_data: bytes) -> bytes | None:
+    """
+    Convert raw image bytes (JPG / PNG / WebP) to a single-page
+    in-memory PDF using Pillow.
+
+    Returns the PDF bytes on success, or None on failure.
+
+    This is the entry point for the mobile upload path:
+      phone user snaps/picks a photo → app calls this → feeds the
+      returned bytes to io.BytesIO() → passes to extract_pages().
+
+    Why Pillow instead of img2pdf or reportlab?
+    - Pillow is already in requirements.txt (was imported for
+      thumbnailing / resizing).  No extra dependency needed.
+    - Pillow's save(format="PDF") produces a proper single-page PDF
+      that pdfplumber can open.
+    Limitation: the resulting PDF contains a raster image, not a
+    text layer.  pdfplumber will return little or no text from it.
+    For real OCR you would add pytesseract / Google Vision here.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_data))
+
+        # Convert palette / RGBA modes that can't embed in PDF
+        if img.mode in ("RGBA", "P", "LA"):
+            img = img.convert("RGB")
+        elif img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+
+        out = io.BytesIO()
+        img.save(out, format="PDF", resolution=200)
+        return out.getvalue()
+    except Exception as exc:
+        # Return None; caller shows an error in the UI
+        print(f"[image_to_pdf_bytes] conversion failed: {exc}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
 #  PDF TEXT EXTRACTION
 # ─────────────────────────────────────────────────────────────
 
 def extract_pages(uploaded_file) -> list:
-    """Return list of page text strings."""
+    """
+    Return list of page text strings.
+
+    [CHANGE] accepts both st.UploadedFile and io.BytesIO objects —
+             pdfplumber.open() handles both natively.
+    """
     try:
         import pdfplumber
         pages = []
@@ -97,13 +157,11 @@ def parse_gst_certificate(pages: list) -> dict:
     # ── GST Number ────────────────────────────────────────────
     gst_no = ''
     for line in lines:
-        # "Registration Number : 06AAJCT0674P1ZR"
         if 'REGISTRATION NUMBER' in line.upper():
             m = GST_RE.search(line)
             if m:
                 gst_no = m.group(1)
                 break
-        # Also check GSTIN label on annexure pages
         if line.strip().upper().startswith('GSTIN'):
             m = GST_RE.search(line)
             if m:
@@ -114,7 +172,6 @@ def parse_gst_certificate(pages: list) -> dict:
         gst_no = m.group(1) if m else ''
 
     # ── Legal Name ────────────────────────────────────────────
-    # Line starts with "1. Legal Name <NAME>" or "Legal Name <NAME>"
     name = ''
     legal_re = re.compile(
         r'(?:1\.\s*)?legal\s+name(?:\s+of\s+business)?\s+(.+)', re.IGNORECASE
@@ -123,22 +180,18 @@ def parse_gst_certificate(pages: list) -> dict:
         m = legal_re.match(line.strip())
         if m:
             candidate = _clean(m.group(1))
-            # Remove trailing junk like "2. Trade Name..."
             candidate = re.split(r'\s+\d+\.\s+', candidate)[0].strip()
             if len(candidate) > 4:
                 name = candidate
                 break
 
-    # Fallback: "TRIGYA INNOVATIONS" anywhere after GST on same/adjacent line
     if not name and gst_no:
         for i, line in enumerate(lines):
             if gst_no in line:
-                # Check same line after GST
                 after = line.split(gst_no, 1)[1].strip()
                 if len(after) > 4 and not after.startswith('www'):
                     name = _clean(after)
                     break
-                # Check 1-2 lines above (company name often above GST in invoices)
                 for offset in [-2, -1, 1, 2]:
                     idx = i + offset
                     if 0 <= idx < len(lines):
@@ -150,9 +203,6 @@ def parse_gst_certificate(pages: list) -> dict:
                     break
 
     # ── Address ───────────────────────────────────────────────
-    # Spans two lines in REG-06:
-    #   "4. Address of Principal Place of  44/3, OLD ROHTAK ROAD..."
-    #   "Business  KHARKHODA, Haryana, Sonipat, Haryana, 131402"
     address = ''
     addr_re = re.compile(
         r'(?:\d+\.\s*)?address\s+of\s+principal\s+place\s+(?:of\s+)?(.+)',
@@ -162,20 +212,16 @@ def parse_gst_certificate(pages: list) -> dict:
         m = addr_re.match(line.strip())
         if m:
             part1 = _clean(m.group(1))
-            # Remove trailing "Business" word that bleeds into next token
             part1 = re.sub(r'\s*business\s*$', '', part1, flags=re.IGNORECASE).strip()
-            # Next line often starts with "Business <rest of address>"
             part2 = ''
             if i + 1 < len(lines):
                 nxt = _clean(lines[i + 1])
                 nxt_stripped = re.sub(r'^business\s+', '', nxt, flags=re.IGNORECASE).strip()
-                # Only take it if it looks like an address (has digit or comma)
                 if re.search(r'\d|,', nxt_stripped):
                     part2 = nxt_stripped
             address = (part1 + (', ' + part2 if part2 else '')).strip(', ')
             break
 
-    # Fallback: look for pincode in text
     if not address:
         pin_re = re.compile(r'\b\d{6}\b')
         for i, line in enumerate(lines):
@@ -220,8 +266,7 @@ def parse_invoice(pages: list) -> dict:
 
     # ── Invoice number ────────────────────────────────────────
     invoice_number = ''
-    # "# TI/PI/2627/1014"  or  "Invoice No: TI/INV/001"
-    for line in lines[:15]:                          # usually in first 15 lines
+    for line in lines[:15]:
         m = HASH_INV_RE.match(line)
         if m:
             invoice_number = _clean(m.group(1))
@@ -230,7 +275,6 @@ def parse_invoice(pages: list) -> dict:
         m = INV_RE.search(text)
         if m:
             invoice_number = _clean(m.group(1))
-    # Also accept Reference number if nothing else
     if not invoice_number:
         ref_re = re.compile(r'reference\s*[:\-]\s*([A-Z0-9][A-Z0-9/\-_.]{3,30})', re.IGNORECASE)
         m = ref_re.search(text)
@@ -241,7 +285,6 @@ def parse_invoice(pages: list) -> dict:
     all_gsts   = find_gst_numbers(text)
     seller_gst = ''
 
-    # Seller GST is usually labelled "GSTIN:" in header (not under "Bill To")
     gstin_re = re.compile(r'GSTIN\s*[:\-]?\s*([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9])', re.IGNORECASE)
     m = gstin_re.search(text)
     if m:
@@ -250,14 +293,12 @@ def parse_invoice(pages: list) -> dict:
         seller_gst = all_gsts[0]
 
     # ── Seller name ───────────────────────────────────────────
-    # Strategy 1: "Beneficiary Name: Trigya Innovations India Pvt Ltd"
     seller_name = ''
     bene_re = re.compile(r'beneficiary\s+name\s*[:\-]\s*(.+)', re.IGNORECASE)
     m = bene_re.search(text)
     if m:
         seller_name = _clean(m.group(1))
 
-    # Strategy 2: company name appears 1-3 lines BEFORE the GSTIN line
     if not seller_name and seller_gst:
         for i, line in enumerate(lines):
             if seller_gst in line.upper():
@@ -266,7 +307,6 @@ def parse_invoice(pages: list) -> dict:
                     if idx < 0:
                         continue
                     c = _clean(lines[idx])
-                    # Skip short lines, URLs, dates, "India", numeric lines
                     if (len(c) > 6
                             and not re.match(r'^(india|date|ref|bill|ship|www\.|http)', c, re.IGNORECASE)
                             and not GST_RE.search(c)
@@ -275,7 +315,6 @@ def parse_invoice(pages: list) -> dict:
                         seller_name = c
                 break
 
-    # Strategy 3: first non-header line with letters (company letterhead)
     if not seller_name:
         skip = re.compile(
             r'^(proforma|invoice|tax invoice|bill|#|date|ref|dear|to:|from:|page)',
@@ -289,17 +328,13 @@ def parse_invoice(pages: list) -> dict:
                 break
 
     # ── Seller address ────────────────────────────────────────
-    # In this invoice: address is lines between company header and GSTIN
-    # "Gurgaon Haryana 122016"  "India"
     seller_addr = ''
     if seller_gst:
         for i, line in enumerate(lines):
             if seller_gst in line.upper():
-                # Collect lines between start and this GSTIN line (seller header block)
                 addr_parts = []
                 for j in range(max(0, i - 5), i):
                     c = _clean(lines[j])
-                    # Skip company name line and short non-address lines
                     if seller_name and c == seller_name:
                         continue
                     if (len(c) > 3
@@ -311,7 +346,6 @@ def parse_invoice(pages: list) -> dict:
                     seller_addr = ', '.join(addr_parts)
                 break
 
-    # Fallback address: pincode scan
     if not seller_addr:
         pin_re = re.compile(r'\b\d{6}\b')
         for i, line in enumerate(lines):

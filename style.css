@@ -86,11 +86,69 @@ section[data-testid="stSidebar"] .stRadio label:has(input:checked) { background:
 .section-label::after, .fields-label::after { content:''; flex:1; height:1px; background:var(--border); }
 .fields-label { margin-top: 0.5rem; }
 
-/* ── File uploader ─────────────────────────────────────────── */
+/* ── Upload mode toggle (Desktop / Mobile radio) ───────────── */
+/* [NEW] Style the horizontal radio that lets users pick upload mode */
+.stRadio[data-baseweb="radio"] > div[role="radiogroup"] {
+  background: var(--surface2) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--rad) !important;
+  padding: 4px !important;
+  gap: 4px !important;
+  display: inline-flex !important;
+}
+.stRadio[data-baseweb="radio"] label {
+  border-radius: 7px !important;
+  padding: 6px 14px !important;
+  font-size: 0.82rem !important;
+  font-weight: 600 !important;
+  transition: all 0.15s !important;
+  cursor: pointer !important;
+}
+.stRadio[data-baseweb="radio"] label:has(input:checked) {
+  background: var(--surface) !important;
+  box-shadow: var(--sh1) !important;
+  color: var(--ink) !important;
+}
+
+/* ── File uploader (desktop) ───────────────────────────────── */
 [data-testid="stFileUploader"] section { border: 1.5px dashed var(--border2) !important; border-radius: var(--rad) !important; background: #faf9f6 !important; transition: all 0.2s !important; min-height: 90px !important; }
 [data-testid="stFileUploader"] section:hover { border-color: var(--g) !important; background: var(--g-l) !important; }
 
 .file-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--g-l); color: var(--g); border: 1px solid var(--g-m); border-radius: 20px; padding: 5px 14px; font-size: 0.8rem; font-weight: 600; margin-top: 8px; }
+
+/* [NEW] Mobile chip variant — blue tint to distinguish from desktop */
+.mobile-chip {
+  background: var(--b-l) !important;
+  color: var(--b) !important;
+  border-color: var(--b-m) !important;
+}
+
+/* ── [NEW] Mobile upload hint box ──────────────────────────── */
+/* Instructional callout shown above the mobile file input */
+.mobile-upload-hint {
+  background: var(--b-l);
+  border: 1px solid var(--b-m);
+  border-left: 4px solid var(--b);
+  border-radius: var(--rad);
+  padding: 0.85rem 1rem;
+  font-size: 0.84rem;
+  color: var(--b);
+  line-height: 1.55;
+  margin-bottom: 0.8rem;
+}
+.mobile-upload-hint strong { font-weight: 700; }
+.mobile-upload-hint em { font-style: normal; font-weight: 600; }
+
+/* ── [NEW] Mobile image preview ─────────────────────────────── */
+/* The st.image() call in the mobile path inherits these. */
+[data-testid="stImage"] img {
+  border-radius: var(--rad) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: var(--sh2) !important;
+  max-height: 320px !important;
+  object-fit: contain !important;
+  width: 100% !important;
+}
 
 /* ── Info box ──────────────────────────────────────────────── */
 .info-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--rad); padding: 1.1rem 1.2rem; box-shadow: var(--sh1); }
@@ -215,3 +273,13 @@ hr { border: none !important; border-top: 1px solid var(--border) !important; ma
 
 /* ── JSON viewer ───────────────────────────────────────────── */
 [data-testid="stJson"] { background: #f8f7f3 !important; border-radius: var(--rad) !important; font-family: var(--mono) !important; font-size: 0.8rem !important; }
+
+/* ── [NEW] Responsive — narrow screens (phones in landscape) ─ */
+@media (max-width: 640px) {
+  .page-title { font-size: 1.8rem !important; }
+  .block-container { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+  .company-card { flex-direction: column; }
+  .fc-row { flex-direction: column; gap: 2px; }
+  .fc-lbl { min-width: unset; }
+  .verdict-counts { gap: 6px; }
+}

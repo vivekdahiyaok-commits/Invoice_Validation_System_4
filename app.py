@@ -113,31 +113,27 @@ if "Validate" in page:
     ''', unsafe_allow_html=True)
 
     # ── Upload section ─────────────────────────────────────
-    st.markdown('<div class="section-label">UPLOAD INVOICE</div>', unsafe_allow_html=True)
+    # Replace your existing invoice uploader with this:
+st.markdown('<div class="section-label">UPLOAD INVOICE</div>', unsafe_allow_html=True)
 
-    up_col, info_col = st.columns([3, 2], gap="large")
+tab1, tab2 = st.tabs(["📁 Upload PDF File", "📷 Use Camera (Mobile)"])
 
-    with up_col:
-        inv_file = st.file_uploader(
-            "Upload Invoice PDF",
-            type=["pdf"],
-            label_visibility="collapsed",
-            key="inv_upload",
-        )
-        if inv_file:
-            st.markdown(f'<div class="file-chip">✓ {inv_file.name} ({round(inv_file.size/1024, 1)} KB)</div>',
-                        unsafe_allow_html=True)
+with tab1:
+    inv_file = st.file_uploader(
+        "Upload Invoice PDF",
+        type=["pdf"],
+        label_visibility="collapsed",
+        key="inv_upload",
+    )
+    if inv_file:
+        st.markdown(f'<div class="file-chip">✓ {inv_file.name}</div>',
+                    unsafe_allow_html=True)
 
-    with info_col:
-        st.markdown('''
-        <div class="info-box">
-          <div class="info-title">What gets validated</div>
-          <div class="info-row"><span class="info-dot green"></span>GST Number (exact match)</div>
-          <div class="info-row"><span class="info-dot green"></span>Company Name (fuzzy match)</div>
-          <div class="info-row"><span class="info-dot green"></span>Registered Address</div>
-          <div class="info-row"><span class="info-dot green"></span>Invoice Number (format check)</div>
-        </div>
-        ''', unsafe_allow_html=True)
+with tab2:
+    st.info("On mobile, if PDF upload doesn't work — take a photo of your invoice and upload the image instead.")
+    cam_file = st.camera_input("Take a photo of the invoice")
+    if cam_file:
+        st.success("Photo captured — note: image upload works best with clear, well-lit documents.")
 
     # ── Manual override ────────────────────────────────────
     with st.expander("✏️  Manually enter or fix extracted values"):
